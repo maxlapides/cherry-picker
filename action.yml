@@ -1,5 +1,7 @@
 name: "Cherry-Pick Action"
 description: "Cherry-pick a PR to another branch"
+icon: move
+color: green
 
 inputs:
   token:
