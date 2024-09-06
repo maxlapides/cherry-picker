@@ -1,0 +1,39 @@
+name: Cherry-Pick PR
+
+on:
+  issue_comment:
+    types:
+      - created
+  pull_request:
+    types:
+      - closed
+
+concurrency: cherry-pick-${{github.event.issue.number || github.event.pull_request.number}}
+
+jobs:
+  cherry-pick:
+    name: Cherry-Pick PR
+    # Replace "my-token-bot" with the name of your bot user
+    if: ${{ github.actor != 'my-token-bot' && github.actor != 'github-actions' && ((github.event.issue.pull_request && startsWith(github.event.comment.body, 'cherry-pick to')) || github.event.pull_request.merged) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get token
+        id: get_token
+        uses: actions/create-github-app-token@v1
+        with:
+          # Modify this to your private key
+          private-key: ${{ secrets.TOKEN_BOT_PRIVATE_KEY }}
+          # Modify this to your app ID
+          app-id: ${{ secrets.TOKEN_BOT_APP_ID }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.get_token.outputs.token }}
+
+      - name: Run Cherry-Pick Action
+        uses: ./.github/actions/cherry-pick
+        with:
+          token: ${{ steps.get_token.outputs.token }}
+          pr_number: ${{github.event.issue.number || github.event.number}}

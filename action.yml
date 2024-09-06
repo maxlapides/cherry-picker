@@ -1,0 +1,142 @@
+name: "Cherry-Pick Action"
+description: "Cherry-pick a PR to another branch"
+
+inputs:
+  token:
+    description: "GitHub token"
+    required: true
+  pr_number:
+    description: "PR number to cherry-pick"
+    required: true
+
+runs:
+  using: composite
+  env:
+    GH_TOKEN: ${{ inputs.token }}
+  steps:
+    - name: Find PR author
+      shell: bash
+      run: |
+        AUTHOR="$(gh pr view ${{ inputs.pr_number }} --json author --jq '.author.login')"
+        [ -z "$AUTHOR" ] && exit 1
+        echo "AUTHOR=$AUTHOR" >> $GITHUB_ENV
+        echo $AUTHOR
+
+    - name: Find branch to cherry-pick to
+      shell: bash
+      run: |
+        if [ -n "${{ github.event.comment }}" ]; then
+          COMMENT="${{ github.event.comment.body }}"
+          COMMENTER="${{ github.event.comment.user.login }}"
+        else
+          COMMENTS="$(gh pr view ${{ inputs.pr_number }} --json comments)"
+          COMMENT=$(echo $COMMENTS | jq -r '.comments[] | select(.body | startswith("cherry-pick to")) | .body' | tail -1)
+          COMMENTER=$(echo $COMMENTS | jq -r '.comments[] | select(.body | startswith("cherry-pick to")) | .author.login' | tail -1)
+        fi
+        TO_BRANCH="$(echo "$COMMENT" | sed -E 's/( *)cherry-pick to ([A-Za-z0-9/\.-_]+)( *)/\2/' | xargs)"
+        echo "TO_BRANCH=$TO_BRANCH" >> $GITHUB_ENV
+        echo "COMMENTER=$COMMENTER" >> $GITHUB_ENV
+        echo $TO_BRANCH
+        echo $COMMENTER
+
+    - name: Fail if branch is missing in comment
+      if: "${{ env.TO_BRANCH == '' }}"
+      shell: bash
+      run: exit 1
+
+    - name: Find commit ID to cherry-pick
+      if: "${{ env.TO_BRANCH != '' }}"
+      shell: bash
+      run: |
+        COMMIT_ID=$(gh api \
+          -H "Accept: application/vnd.github.v3+json" \
+          /repos/$GITHUB_REPOSITORY/issues/${{ inputs.pr_number }}/events \
+          --jq '.[] | select(.event == "merged") | .commit_id' \
+        )
+        echo "COMMIT_ID=$COMMIT_ID" >> $GITHUB_ENV
+        echo $COMMIT_ID
+
+    - name: Cherry-pick merged commit
+      if: "${{ env.COMMIT_ID != '' }}"
+      shell: bash
+      run: |
+        MERGE_CONFLICT=false
+        EMPTY_CHERRY_PICK=false
+
+        git config --global user.email "noreply@github.com"
+        git config --global user.name "Cherry-pick Bot"
+
+        git fetch
+        git checkout "$TO_BRANCH" || exit 1
+        git pull || exit 1
+        CHERRY_PICK_RESULT="$(git cherry-pick $COMMIT_ID || true)"
+
+        (grep -q "nothing to commit" <<< "$CHERRY_PICK_RESULT") && EMPTY_CHERRY_PICK=true
+        echo "EMPTY_CHERRY_PICK=$EMPTY_CHERRY_PICK" >> $GITHUB_ENV
+        if [ "$EMPTY_CHERRY_PICK" = true ]; then
+          exit 1
+        fi
+
+        (grep -q "CONFLICT" <<< "$CHERRY_PICK_RESULT") && MERGE_CONFLICT=true
+        echo "MERGE_CONFLICT=$MERGE_CONFLICT" >> $GITHUB_ENV
+        if [ "$MERGE_CONFLICT" = true ]; then
+          git add .
+          exit 0
+        fi
+
+    - name: Create pull request title
+      id: title
+      shell: bash
+      run: |
+        PR_TITLE=$(gh pr view ${{ inputs.pr_number }} --json title --jq '.title')
+        TITLE_CLEAN="$(echo "$PR_TITLE" | sed -E 's/(\[(.*)\])*(.*)/\3/' | xargs -0)"
+        TITLE_PREFIX="$(echo "$TO_BRANCH" | sed -E 's/release\///' | xargs -0)"
+        TITLE_NEW="[$TITLE_PREFIX] $TITLE_CLEAN"
+        echo $TITLE_NEW
+        echo "title=$TITLE_NEW" >> $GITHUB_OUTPUT
+
+    - name: Create pull request
+      id: create-pr
+      if: ${{ env.EMPTY_CHERRY_PICK != 'true' }}
+      uses: peter-evans/create-pull-request@v7
+      with:
+        token: ${{ inputs.token }}
+        branch: cherry-pick/cp-${{ inputs.pr_number }}-${{ github.run_number }}
+        commit-message: ${{ steps.title.outputs.title }}
+        title: ${{ steps.title.outputs.title }}
+        body: Generated from https://github.com/${{ github.repository }}/pull/${{ inputs.pr_number }}
+        delete-branch: true
+
+    - name: Enable auto-merge on pull request
+      if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
+      shell: bash
+      run: gh pr merge --auto --squash "${{ steps.create-pr.outputs.pull-request-number }}"
+
+    - name: Approve pull request
+      if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
+      shell: bash
+      run: gh pr review --approve "${{ steps.create-pr.outputs.pull-request-number }}"
+
+    - name: PR comment
+      if: "${{ env.TO_BRANCH != '' }}"
+      shell: bash
+      run: |
+        if [ "$AUTHOR" = "$COMMENTER" ] || [ -z "$COMMENTER" ]; then
+          USER_MENTION="@$AUTHOR"
+        else
+          USER_MENTION="@$COMMENTER @$AUTHOR"
+        fi
+
+        if [ -z "$COMMIT_ID" ]; then
+          gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION This PR will be cherry-picked to \`$TO_BRANCH\` when it is merged. (To undo this, you can delete your cherry-pick comment.)"
+        elif [ "$EMPTY_CHERRY_PICK" = true ]; then
+          gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION It is not possible to automatically cherry-pick this pull request to \`$TO_BRANCH\` because there is nothing to commit."
+        elif [ "$MERGE_CONFLICT" = true ]; then
+          gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION It is not possible to automatically cherry-pick this pull request to \`$TO_BRANCH\`. Please modify [this pull request]($PR_URL) to handle the merge conflicts."
+        elif [ -n "$PR_URL" ]; then
+          gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION A [new pull request]($PR_URL) has been opened to cherry-pick this pull request to \`$TO_BRANCH\`."
+        else
+          gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION It is not possible to automatically cherry-pick this pull request to \`$TO_BRANCH\`. An unknown error occurred."
+        fi
+      env:
+        PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
