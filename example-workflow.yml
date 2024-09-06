@@ -33,7 +33,7 @@ jobs:
           token: ${{ steps.get_token.outputs.token }}
 
       - name: Run Cherry-Pick Action
-        uses: ./.github/actions/cherry-pick
+        uses: maxlapides/cherry-picker@v0.1.0
         with:
           token: ${{ steps.get_token.outputs.token }}
           pr_number: ${{github.event.issue.number || github.event.number}}
