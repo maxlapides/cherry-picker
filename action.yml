@@ -93,7 +93,7 @@ runs:
       run: |
         PR_TITLE=$(gh pr view ${{ inputs.pr_number }} --json title --jq '.title')
         TITLE_CLEAN="$(echo "$PR_TITLE" | sed -E 's/(\[(.*)\])*(.*)/\3/' | xargs -0)"
-        TITLE_PREFIX="$(echo "$TO_BRANCH" | sed -E 's/release\///' | xargs -0)"
+        TITLE_PREFIX="$(echo "$TO_BRANCH" | sed -E 's/release(\/|-)//g' | xargs -0)"
         TITLE_NEW="[$TITLE_PREFIX] $TITLE_CLEAN"
         echo $TITLE_NEW
         echo "title=$TITLE_NEW" >> $GITHUB_OUTPUT
