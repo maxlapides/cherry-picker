@@ -27,6 +27,8 @@ runs:
 
     - name: Find branch to cherry-pick to
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         if [ -n "${{ github.event.comment }}" ]; then
           COMMENT="${{ github.event.comment.body }}"
@@ -50,6 +52,8 @@ runs:
     - name: Find commit ID to cherry-pick
       if: "${{ env.TO_BRANCH != '' }}"
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         COMMIT_ID=$(gh api \
           -H "Accept: application/vnd.github.v3+json" \
@@ -90,6 +94,8 @@ runs:
     - name: Create pull request title
       id: title
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         PR_TITLE=$(gh pr view ${{ inputs.pr_number }} --json title --jq '.title')
         TITLE_CLEAN="$(echo "$PR_TITLE" | sed -E 's/(\[(.*)\])*(.*)/\3/' | xargs -0)"
@@ -113,16 +119,22 @@ runs:
     - name: Enable auto-merge on pull request
       if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: gh pr merge --auto --squash "${{ steps.create-pr.outputs.pull-request-number }}"
 
     - name: Approve pull request
       if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: gh pr review --approve "${{ steps.create-pr.outputs.pull-request-number }}"
 
     - name: PR comment
       if: "${{ env.TO_BRANCH != '' }}"
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         if [ "$AUTHOR" = "$COMMENTER" ] || [ -z "$COMMENTER" ]; then
           USER_MENTION="@$AUTHOR"
