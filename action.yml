@@ -1,4 +1,4 @@
-name: Cherry-Picker
+name: Cherry-Picker Bot
 description: "Cherry-pick a PR to another branch"
 branding:
   icon: move
