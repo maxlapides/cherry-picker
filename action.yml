@@ -135,6 +135,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
+        PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
       run: |
         if [ "$AUTHOR" = "$COMMENTER" ] || [ -z "$COMMENTER" ]; then
           USER_MENTION="@$AUTHOR"
@@ -153,5 +154,3 @@ runs:
         else
           gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION It is not possible to automatically cherry-pick this pull request to \`$TO_BRANCH\`. An unknown error occurred."
         fi
-      env:
-        PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
