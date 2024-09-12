@@ -6,7 +6,10 @@ branding:
 
 inputs:
   token:
-    description: "GitHub token"
+    description: "GitHub bot token, used for creating PRs"
+    required: true
+  gh_token:
+    description: "GitHub token, used for auto-approving PRs"
     required: true
   pr_number:
     description: "PR number to cherry-pick"
@@ -127,7 +130,7 @@ runs:
       if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ inputs.gh_token }}
       run: gh pr review --approve "${{ steps.create-pr.outputs.pull-request-number }}"
 
     - name: PR comment
