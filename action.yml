@@ -47,10 +47,10 @@ runs:
         echo $TO_BRANCH
         echo $COMMENTER
 
-    - name: Fail if branch is missing in comment
-      if: "${{ env.TO_BRANCH == '' }}"
+    - name: Cancel if branch is missing in comment
+      if: "${{env.TO_BRANCH == ''}}"
       shell: bash
-      run: exit 1
+      run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
     - name: Find commit ID to cherry-pick
       if: "${{ env.TO_BRANCH != '' }}"
