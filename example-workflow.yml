@@ -13,16 +13,7 @@ concurrency: cherry-pick-${{github.event.issue.number || github.event.pull_reque
 jobs:
   cherry-pick:
     name: Cherry-Pick PR
-    # Replace "my-token-bot" with the name of your bot user
-    if: >-
-      github.actor != 'my-token-bot' &&
-      github.actor != 'github-actions' &&
-      ((github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, 'cherry-pick to')) ||
-      (github.event_name == 'pull_request' &&
-      github.event.pull_request.merged &&
-      !startsWith(github.event.pull_request.head.ref, 'cherry-pick/cp-')))
+    if: ${{ (github.event.issue.pull_request && startsWith(github.event.comment.body, 'cherry-pick to')) || github.event.pull_request.merged }}
     runs-on: ubuntu-latest
     steps:
       - name: Get token
