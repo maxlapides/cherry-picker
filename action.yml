@@ -47,7 +47,7 @@ runs:
         echo $TO_BRANCH
         echo $COMMENTER
 
-    - name: Fail if branch is missing in comment    
+    - name: Fail if branch is missing in comment
       if: "${{github.event.issue.pull_request && env.TO_BRANCH == ''}}"
       shell: bash
       run: exit 1
@@ -111,7 +111,7 @@ runs:
     - name: Create pull request
       id: create-pr
       if: ${{ env.COMMIT_ID != '' && env.EMPTY_CHERRY_PICK != 'true' }}
-      uses: peter-evans/create-pull-request@v8.0.0
+      uses: peter-evans/create-pull-request@v8.1.0
       with:
         token: ${{ inputs.token }}
         branch: cherry-pick/cp-${{ inputs.pr_number }}-${{ github.run_number }}
