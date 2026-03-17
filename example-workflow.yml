@@ -14,7 +14,15 @@ jobs:
   cherry-pick:
     name: Cherry-Pick PR
     # Replace "my-token-bot" with the name of your bot user
-    if: ${{ github.actor != 'my-token-bot' && github.actor != 'github-actions' && ((github.event.issue.pull_request && startsWith(github.event.comment.body, 'cherry-pick to')) || github.event.pull_request.merged) }}
+    if: >-
+      github.actor != 'my-token-bot' &&
+      github.actor != 'github-actions' &&
+      ((github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, 'cherry-pick to')) ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.merged &&
+      !startsWith(github.event.pull_request.head.ref, 'cherry-pick/cp-')))
     runs-on: ubuntu-latest
     steps:
       - name: Get token
@@ -33,7 +41,7 @@ jobs:
           token: ${{ steps.get_token.outputs.token }}
 
       - name: Run Cherry-Pick Action
-        uses: maxlapides/cherry-picker@v1.0.0
+        uses: maxlapides/cherry-picker@v1.1.0
         with:
           token: ${{ steps.get_token.outputs.token }}
           gh_token: ${{ secrets.GH_TOKEN }}

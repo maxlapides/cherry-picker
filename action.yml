@@ -96,6 +96,7 @@ runs:
 
     - name: Create pull request title
       id: title
+      if: "${{ env.COMMIT_ID != '' }}"
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
@@ -109,7 +110,7 @@ runs:
 
     - name: Create pull request
       id: create-pr
-      if: ${{ env.EMPTY_CHERRY_PICK != 'true' }}
+      if: ${{ env.COMMIT_ID != '' && env.EMPTY_CHERRY_PICK != 'true' }}
       uses: peter-evans/create-pull-request@v7
       with:
         token: ${{ inputs.token }}
