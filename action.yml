@@ -9,11 +9,15 @@ inputs:
     description: "GitHub bot token, used for creating PRs"
     required: true
   gh_token:
-    description: "GitHub token, used for auto-approving PRs"
-    required: true
+    description: "GitHub token, used for auto-approving PRs when auto-approval is enabled"
+    required: false
   pr_number:
     description: "PR number to cherry-pick"
     required: true
+  auto_approve_and_merge:
+    description: "Whether to automatically approve and enable auto-merge for cherry-pick PRs"
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -120,15 +124,22 @@ runs:
         body: Generated from https://github.com/${{ github.repository }}/pull/${{ inputs.pr_number }}
         delete-branch: true
 
+    - name: Fail if auto-approval is enabled without gh_token
+      if: ${{ inputs.auto_approve_and_merge == 'true' && steps.create-pr.outputs.pull-request-operation == 'created' && inputs.gh_token == '' }}
+      shell: bash
+      run: |
+        echo "gh_token is required when auto_approve_and_merge is enabled." >&2
+        exit 1
+
     - name: Enable auto-merge on pull request
-      if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
+      if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' && inputs.auto_approve_and_merge == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
       run: gh pr merge --auto --squash "${{ steps.create-pr.outputs.pull-request-number }}"
 
     - name: Approve pull request
-      if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' }}
+      if: ${{ env.EMPTY_CHERRY_PICK != 'true' && env.MERGE_CONFLICT != 'true' && steps.create-pr.outputs.pull-request-operation == 'created' && inputs.auto_approve_and_merge == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh_token }}

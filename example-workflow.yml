@@ -37,3 +37,5 @@ jobs:
           token: ${{ steps.get_token.outputs.token }}
           gh_token: ${{ secrets.GH_TOKEN }}
           pr_number: ${{ github.event.issue.number || github.event.number }}
+          # Optional: disable if cherry-pick PRs should be reviewed and merged manually.
+          # auto_approve_and_merge: false
