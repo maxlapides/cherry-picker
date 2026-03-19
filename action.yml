@@ -147,6 +147,7 @@ runs:
         commit-message: ${{ steps.title.outputs.title }}
         title: ${{ steps.title.outputs.title }}
         body: Generated from https://github.com/${{ github.repository }}/pull/${{ inputs.pr_number }}
+        draft: ${{ env.MERGE_CONFLICT == 'true' && 'true' || 'false' }}
         delete-branch: true
 
     - name: Fail if auto-approval is enabled without gh_token
