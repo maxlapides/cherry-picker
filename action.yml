@@ -106,7 +106,32 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
       run: |
         PR_TITLE=$(gh pr view ${{ inputs.pr_number }} --json title --jq '.title')
-        TITLE_CLEAN="$(echo "$PR_TITLE" | sed -E 's/(\[(.*)\])*(.*)/\3/' | xargs -0)"
+        branch_exists() {
+          local branch_name="$1"
+          git show-ref --verify --quiet "refs/heads/$branch_name" ||
+            git show-ref --verify --quiet "refs/remotes/origin/$branch_name"
+        }
+
+        branch_matches_title_prefix() {
+          local branch_name="$1"
+
+          branch_exists "$branch_name" ||
+            branch_exists "release/$branch_name" ||
+            branch_exists "release-$branch_name"
+        }
+
+        TITLE_CLEAN="$PR_TITLE"
+        while [[ "$TITLE_CLEAN" =~ ^\[([^]]+)\](.*)$ ]]; do
+          BRACKET_TEXT="${BASH_REMATCH[1]}"
+
+          if ! branch_matches_title_prefix "$BRACKET_TEXT"; then
+            break
+          fi
+
+          TITLE_CLEAN="${BASH_REMATCH[2]}"
+          TITLE_CLEAN="$(printf '%s' "$TITLE_CLEAN" | sed -E 's/^[[:space:]]+//')"
+        done
+
         TITLE_PREFIX="$(echo "$TO_BRANCH" | sed -E 's/release(\/|-)//g' | xargs -0)"
         TITLE_NEW="[$TITLE_PREFIX] $TITLE_CLEAN"
         echo $TITLE_NEW
