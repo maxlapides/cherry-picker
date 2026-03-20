@@ -42,10 +42,11 @@ runs:
           COMMENTER="${{ github.event.comment.user.login }}"
         else
           COMMENTS="$(gh pr view ${{ inputs.pr_number }} --json comments)"
-          COMMENT=$(echo $COMMENTS | jq -r '.comments[] | select(.body | startswith("cherry-pick to")) | .body' | tail -1)
-          COMMENTER=$(echo $COMMENTS | jq -r '.comments[] | select(.body | startswith("cherry-pick to")) | .author.login' | tail -1)
+          COMMENT="$(printf '%s' "$COMMENTS" | jq -r '[.comments[] | select(.body | startswith("cherry-pick to"))] | last | .body // empty')"
+          COMMENTER="$(printf '%s' "$COMMENTS" | jq -r '[.comments[] | select(.body | startswith("cherry-pick to"))] | last | .author.login // empty')"
         fi
-        TO_BRANCH="$(echo "$COMMENT" | sed -E 's/( *)cherry-pick to ([A-Za-z0-9/\.-_]+)( *)/\2/' | xargs)"
+        COMMENT="$(printf '%s' "$COMMENT" | tr -d '\r' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+        TO_BRANCH="$(printf '%s\n' "$COMMENT" | sed -nE 's/^[[:space:]]*cherry-pick to[[:space:]]+([^[:space:]]+)[[:space:]]*$/\1/p')"
         echo "TO_BRANCH=$TO_BRANCH" >> $GITHUB_ENV
         echo "COMMENTER=$COMMENTER" >> $GITHUB_ENV
         echo $TO_BRANCH
@@ -62,11 +63,11 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
       run: |
-        COMMIT_ID=$(gh api \
-          -H "Accept: application/vnd.github.v3+json" \
-          /repos/$GITHUB_REPOSITORY/issues/${{ inputs.pr_number }}/events \
-          --jq '.[] | select(.event == "merged") | .commit_id' \
-        )
+        COMMIT_ID="$(gh api \
+          -H "Accept: application/vnd.github+json" \
+          /repos/$GITHUB_REPOSITORY/pulls/${{ inputs.pr_number }} \
+          --jq 'if .merged_at != null then .merge_commit_sha // empty else empty end' \
+        )"
         echo "COMMIT_ID=$COMMIT_ID" >> $GITHUB_ENV
         echo $COMMIT_ID
 
@@ -132,7 +133,7 @@ runs:
           TITLE_CLEAN="$(printf '%s' "$TITLE_CLEAN" | sed -E 's/^[[:space:]]+//')"
         done
 
-        TITLE_PREFIX="$(echo "$TO_BRANCH" | sed -E 's/release(\/|-)//g' | xargs -0)"
+        TITLE_PREFIX="$(printf '%s' "$TO_BRANCH" | sed -E 's/release(\/|-)//g' | xargs)"
         TITLE_NEW="[$TITLE_PREFIX] $TITLE_CLEAN"
         echo $TITLE_NEW
         echo "title=$TITLE_NEW" >> $GITHUB_OUTPUT
