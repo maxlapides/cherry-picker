@@ -57,8 +57,22 @@ runs:
       shell: bash
       run: exit 1
 
-    - name: Find commit ID to cherry-pick
+    - name: Check target branch
       if: "${{ env.TO_BRANCH != '' }}"
+      shell: bash
+      run: |
+        if git ls-remote --exit-code --heads origin "refs/heads/$TO_BRANCH"; then
+          echo "TARGET_BRANCH_EXISTS=true" >> "$GITHUB_ENV"
+        else
+          STATUS=$?
+          if [ "$STATUS" -ne 2 ]; then
+            exit "$STATUS"
+          fi
+          echo "TARGET_BRANCH_EXISTS=false" >> "$GITHUB_ENV"
+        fi
+
+    - name: Find commit ID to cherry-pick
+      if: "${{ env.TO_BRANCH != '' && env.TARGET_BRANCH_EXISTS == 'true' }}"
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
@@ -195,7 +209,9 @@ runs:
           USER_MENTION="@$COMMENTER @$AUTHOR"
         fi
 
-        if [ -z "$COMMIT_ID" ]; then
+        if [ "$TARGET_BRANCH_EXISTS" = false ]; then
+          gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION The branch \`$TO_BRANCH\` doesn't exist. Please check the branch name and post a new cherry-pick comment."
+        elif [ -z "$COMMIT_ID" ]; then
           gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION This PR will be cherry-picked to \`$TO_BRANCH\` when it is merged. (To undo this, you can delete your cherry-pick comment.)"
         elif [ "$EMPTY_CHERRY_PICK" = true ]; then
           gh pr comment ${{ inputs.pr_number }} -b "$USER_MENTION It is not possible to automatically cherry-pick this pull request to \`$TO_BRANCH\` because there is nothing to commit."
