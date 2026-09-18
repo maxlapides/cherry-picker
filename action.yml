@@ -138,6 +138,16 @@ runs:
         echo $TITLE_NEW
         echo "title=$TITLE_NEW" >> $GITHUB_OUTPUT
 
+    - name: Create pull request description
+      id: description
+      if: ${{ env.COMMIT_ID != '' && env.EMPTY_CHERRY_PICK != 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: node "$ACTION_PATH/scripts/pr_body.js"
+
     - name: Create pull request
       id: create-pr
       if: ${{ env.COMMIT_ID != '' && env.EMPTY_CHERRY_PICK != 'true' }}
@@ -147,7 +157,7 @@ runs:
         branch: cherry-pick/cp-${{ inputs.pr_number }}-${{ github.run_number }}
         commit-message: ${{ steps.title.outputs.title }}
         title: ${{ steps.title.outputs.title }}
-        body: Generated from https://github.com/${{ github.repository }}/pull/${{ inputs.pr_number }}
+        body-path: ${{ steps.description.outputs.body_path }}
         draft: ${{ env.MERGE_CONFLICT == 'true' && 'true' || 'false' }}
         delete-branch: true
 

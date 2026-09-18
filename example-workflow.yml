@@ -32,7 +32,7 @@ jobs:
           token: ${{ steps.get_token.outputs.token }}
 
       - name: Run Cherry-Pick Action
-        uses: maxlapides/cherry-picker@v1.1.0
+        uses: maxlapides/cherry-picker@v1.5.0
         with:
           token: ${{ steps.get_token.outputs.token }}
           gh_token: ${{ secrets.GH_TOKEN }}
