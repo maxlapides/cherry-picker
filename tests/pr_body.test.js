@@ -74,8 +74,10 @@ test('writes a PR body that includes tickets from later comment pages', (t) => {
     return JSON.stringify([[{ user: { login: 'someone' }, body: 'hello' }], [linkback('REI-1647')]]);
   });
   main(env);
-  const bodyPath = fs.readFileSync(env.GITHUB_OUTPUT, 'utf8').trim().replace(/^body_path=/, '');
+  const output = fs.readFileSync(env.GITHUB_OUTPUT, 'utf8');
+  const bodyPath = output.match(/^body_path=(.*)$/m)[1];
   assert.equal(fs.readFileSync(bodyPath, 'utf8'), `Generated from ${SOURCE_URL}\n\nRelated to REI-1647\n`);
+  assert.match(output, /^linear_ids=REI-1647$/m);
 });
 
 test('does not publish an incomplete body when GitHub fails', (t) => {

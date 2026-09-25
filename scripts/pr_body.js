@@ -3,7 +3,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function buildBody(sourceUrl, sourceBody, comments) {
+function getIdentifiers(sourceBody, comments) {
   // Preserve our relation lines when cherry-picking a cherry-pick, even before
   // Linear has posted its linkback on that PR.
   const identifiers = new Set(
@@ -27,9 +27,14 @@ function buildBody(sourceUrl, sourceBody, comments) {
     }
   }
 
+  return [...identifiers].sort();
+}
+
+function buildBody(sourceUrl, sourceBody, comments) {
+  const identifiers = getIdentifiers(sourceBody, comments);
   let body = `Generated from ${sourceUrl}`;
-  if (identifiers.size) {
-    body += '\n\n' + [...identifiers].sort().map((id) => `Related to ${id}`).join('\n');
+  if (identifiers.length) {
+    body += '\n\n' + identifiers.map((id) => `Related to ${id}`).join('\n');
   }
   return body + '\n';
 }
@@ -47,12 +52,15 @@ function main(env = process.env) {
   const source = ghJson('api', `repos/${repository}/pulls/${prNumber}`);
   const pages = ghJson('api', '--paginate', '--slurp',
     `repos/${repository}/issues/${prNumber}/comments?per_page=100`);
-  const body = buildBody(source.html_url, source.body, pages.flat());
+  const comments = pages.flat();
+  const body = buildBody(source.html_url, source.body, comments);
+  const identifiers = getIdentifiers(source.body, comments);
   const bodyPath = path.join(env.RUNNER_TEMP, 'cherry-pick-pr-body.md');
   fs.writeFileSync(bodyPath, body, 'utf8');
   fs.appendFileSync(env.GITHUB_OUTPUT, `body_path=${bodyPath}\n`, 'utf8');
+  fs.appendFileSync(env.GITHUB_OUTPUT, `linear_ids=${identifiers.join(' ')}\n`, 'utf8');
 }
 
-module.exports = { buildBody, main };
+module.exports = { buildBody, getIdentifiers, main };
 
 if (require.main === module) main();
