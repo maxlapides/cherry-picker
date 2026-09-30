@@ -31,3 +31,23 @@ test('keeps the original title when no linked issue is known', () => {
     '[87.0] [REI-1671] Fix assistant',
   );
 });
+
+test('preserves linked tickets anywhere in the source title without adding another prefix', () => {
+  for (const title of [
+    'fix(tasks): [EXP-4314] route require-changes expenses',
+    'fix(tasks): route require-changes expenses (exp-4314)',
+  ]) {
+    assert.equal(
+      buildTitle(title, 'release/88.0', ['EXP-4314', 'MOBILE-1533'], branchExists),
+      `[88.0] ${title}`,
+    );
+  }
+});
+
+test('does not mistake a different ticket for the linked issue', () => {
+  assert.equal(
+    buildTitle('fix(tasks): [EXP-43140] route expenses',
+      'release/88.0', ['EXP-4314'], branchExists),
+    '[88.0] [EXP-4314] fix(tasks): [EXP-43140] route expenses',
+  );
+});

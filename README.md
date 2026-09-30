@@ -18,7 +18,7 @@ See `example-workflow.yml` for a complete example that you can copy/paste into y
 
 Cherry-pick PR descriptions carry over tickets from the source PR's Linear bot linkback comments, including tickets linked through the original branch name. Each ticket is listed once as `Related to TEAM-123`. Linear's [relation magic words](https://linear.app/docs/github#magic-words) associate the PR without changing the ticket's status.
 
-When a linked ticket is known, the cherry-pick PR title and commit subject also put its ID after the target release prefix, for example `[87.0] [REI-1671] feat(assistant): Fix assistant`. If the source title already starts with a linked ticket ID, that ID takes priority. With no known linked ticket, the action keeps the descriptive source title without inventing an ID.
+When a linked ticket is known, the cherry-pick PR title and commit subject also put its ID after the target release prefix, for example `[87.0] [REI-1671] feat(assistant): Fix assistant`. If the source title already contains a linked ticket ID anywhere (case-insensitive), the action preserves its position without adding another ticket prefix. With no known linked ticket, the action keeps the descriptive source title without inventing an ID.
 
 The action reads all comment pages using the existing GitHub token; no Linear token is required. Only issue links in the summaries of `linear[bot]` or `linear-code[bot]` linkback comments are copied, not references inside embedded ticket descriptions or other users' comments. Generated `Related to TEAM-123` lines are also preserved when cherry-picking a cherry-pick.
 

@@ -15,9 +15,11 @@ function buildTitle(sourceTitle, targetBranch, identifiers, branchExists) {
   }
 
   const knownIds = identifiers.filter((id) => ISSUE_ID.test(id));
-  const titleId = title.match(/^\[([A-Z][A-Z0-9]*-[0-9]+)\]/)?.[1];
-  const primaryId = titleId && knownIds.includes(titleId) ? titleId : knownIds[0];
-  if (primaryId && titleId !== primaryId) title = `[${primaryId}] ${title}`;
+  const titleIds = new Set((title.match(/\b[A-Z][A-Z0-9]*-[0-9]+\b/gi) || [])
+    .map((id) => id.toUpperCase()));
+  if (knownIds.length && !knownIds.some((id) => titleIds.has(id))) {
+    title = `[${knownIds[0]}] ${title}`;
+  }
 
   const release = targetBranch.replace(/release(\/|-)/g, '').trim();
   return `[${release}] ${title}`;
