@@ -8,12 +8,16 @@ on:
     types:
       - closed
 
-concurrency: cherry-pick-${{github.event.issue.number || github.event.pull_request.number}}
-
 jobs:
   cherry-pick:
     name: Cherry-Pick PR
     if: ${{ (github.event.issue.pull_request && startsWith(github.event.comment.body, 'cherry-pick to')) || github.event.pull_request.merged }}
+    # Scope concurrency to eligible jobs, so bot replies and unrelated comments
+    # cannot replace pending work. Every run reconciles all current requests.
+    concurrency:
+      group: cherry-pick-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     steps:
       - name: Get token
@@ -32,7 +36,8 @@ jobs:
           token: ${{ steps.get_token.outputs.token }}
 
       - name: Run Cherry-Pick Action
-        uses: maxlapides/cherry-picker@v1.5.3
+        # Pin to a reviewed release SHA in production.
+        uses: maxlapides/cherry-picker@v1.6.0
         with:
           token: ${{ steps.get_token.outputs.token }}
           gh_token: ${{ secrets.GH_TOKEN }}

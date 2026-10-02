@@ -16,12 +16,17 @@ See `example-workflow.yml` for a complete example that you can copy/paste into y
 
 ## Linear tickets
 
-Cherry-pick PR descriptions carry over tickets from the source PR's Linear bot linkback comments, including tickets linked through the original branch name. Each ticket is listed once as `Related to TEAM-123`. Linear's [relation magic words](https://linear.app/docs/github#magic-words) associate the PR without changing the ticket's status.
+Cherry-pick PRs preserve the source PR's linked Linear tickets without changing their status. Linked ticket IDs are included in the title when they are not already present, and duplicate references are avoided.
 
-When a linked ticket is known, the cherry-pick PR title and commit subject also put its ID after the target release prefix, for example `[87.0] [REI-1671] feat(assistant): Fix assistant`. If the source title already contains a linked ticket ID anywhere (case-insensitive), the action preserves its position without adding another ticket prefix. With no known linked ticket, the action keeps the descriptive source title without inventing an ID.
+## Multiple targets and retries
 
-The action reads all comment pages using the existing GitHub token; no Linear token is required. Only issue links in the summaries of `linear[bot]` or `linear-code[bot]` linkback comments are copied, not references inside embedded ticket descriptions or other users' comments. Generated `Related to TEAM-123` lines are also preserved when cherry-picking a cherry-pick.
+Post a separate `cherry-pick to <branch>` comment for each target branch. You can request cherry-picks before or after the source PR merges. Requests made before merge are acknowledged and processed after merge.
 
-This relies on Linear posting its linkback comment before the action runs. Associations without a linkback or an existing generated relation line cannot be discovered. A failed GitHub lookup stops PR creation rather than silently dropping tickets. Runners need Node.js in addition to the existing `gh`, `jq`, and Git requirements (all are available on GitHub-hosted Ubuntu runners). No npm dependencies are needed.
+- Each target gets its own cherry-pick PR. A failure on one target does not prevent the others from being processed.
+- Repeated requests reuse an existing open or merged cherry-pick PR. Existing manual edits are preserved.
+- Conflicts produce a draft PR for you to resolve. If the changes are already present, the bot reports that no PR is needed.
+- To cancel a request before processing starts, delete all comments requesting that target. This does not undo an existing cherry-pick PR.
+- If a target branch is missing or an attempt fails, correct the problem and post a new cherry-pick comment or rerun the workflow.
+- If a cherry-pick PR was closed without merging, post a new request to try again.
 
-Run the description tests with `node --test tests/*.test.js`.
+The bot reports the outcome for each target on the source PR.
