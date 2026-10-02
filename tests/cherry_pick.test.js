@@ -50,36 +50,41 @@ function fixture(t) {
   return { root, git, base, sha, read, write, request, run, success };
 }
 
-test('retains two pre-merge requests and processes both after merge, without duplicates', (t) => {
-  const f = fixture(t);
-  f.request('release/88.0'); f.request('release/87.0', 2);
-  const requests = f.read();
-  requests.comments[0].body += '\r\n\r\nNeeded for the hotfix, thanks!';
-  requests.comments[1].body += '\ncc @qa';
-  f.write(requests);
-  const merged = f.read().source;
-  f.write({ ...f.read(), source: { ...merged, state: 'open', merged_at: null } });
-  f.success();
-  assert.equal(f.read().pulls.length, 0);
-  assert.equal(f.read().comments.filter((c) => c.user.type === 'Bot').length, 2);
-  f.write({ ...f.read(), source: merged });
-  f.success();
-  assert.deepEqual(f.read().pulls.map((p) => p.base.ref), ['release/88.0', 'release/87.0']);
-  for (const pr of f.read().pulls) {
-    assert.equal(f.git('--git-dir=remote.git', 'show', `${pr.head.ref}:file`), 'fixed');
-    assert.equal(f.git('--git-dir=remote.git', 'log', '-1', '--format=%an <%ae>', pr.head.ref),
-      f.git('log', '-1', '--format=%an <%ae>', f.sha));
-  }
-  f.request('release/88.0', 3);
-  f.success();
-  assert.equal(f.read().pulls.length, 2);
-  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
-  assert.equal(f.git('worktree', 'list', '--porcelain').match(/worktree /g).length, 1);
-});
+for (const [description, comments] of [
+  ['separate comments', ['release/88.0', 'release/87.0']],
+  ['one comment', ['release/88.0 \t release/87.0 release/88.0']],
+]) {
+  test(`retains pre-merge targets in ${description} and processes both without duplicates`, (t) => {
+    const f = fixture(t);
+    comments.forEach((branches, index) => f.request(branches, index + 1));
+    const requests = f.read();
+    requests.comments[0].body += '\r\n\r\nNeeded for the hotfix, thanks!';
+    if (requests.comments[1]) requests.comments[1].body += '\ncc @qa';
+    f.write(requests);
+    const merged = f.read().source;
+    f.write({ ...f.read(), source: { ...merged, state: 'open', merged_at: null } });
+    f.success();
+    assert.equal(f.read().pulls.length, 0);
+    assert.equal(f.read().comments.filter((c) => c.user.type === 'Bot').length, 2);
+    f.write({ ...f.read(), source: merged });
+    f.success();
+    assert.deepEqual(f.read().pulls.map((p) => p.base.ref), ['release/88.0', 'release/87.0']);
+    for (const pr of f.read().pulls) {
+      assert.equal(f.git('--git-dir=remote.git', 'show', `${pr.head.ref}:file`), 'fixed');
+      assert.equal(f.git('--git-dir=remote.git', 'log', '-1', '--format=%an <%ae>', pr.head.ref),
+        f.git('log', '-1', '--format=%an <%ae>', f.sha));
+    }
+    f.request('release/88.0', 3);
+    f.success();
+    assert.equal(f.read().pulls.length, 2);
+    assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
+    assert.equal(f.git('worktree', 'list', '--porcelain').match(/worktree /g).length, 1);
+  });
+}
 
 test('after merge, new targets execute and a failed PR creation recovers the pushed branch', (t) => {
   const f = fixture(t);
-  f.request('release/88.0'); f.request('release/87.0', 2);
+  f.request('release/88.0 release/87.0');
   f.write({ ...f.read(), failCreateOnce: true });
   assert.equal(f.run().status, 1);
   assert.deepEqual(f.read().pulls.map((p) => p.base.ref), ['release/87.0']);
@@ -98,8 +103,7 @@ test('missing, conflicting, and empty targets do not prevent clean targets', (t)
   f.git('commit', '-am', 'Conflicting release');
   f.git('push', 'origin', 'HEAD:refs/heads/release/conflict');
   f.git('checkout', '--detach', f.sha);
-  f.request('release/missing'); f.request('release/conflict', 2);
-  f.request('development', 3); f.request('release/88.0', 4);
+  f.request('release/missing release/conflict development release/88.0');
   f.success();
   assert.equal(f.read().pulls.length, 2);
   assert.equal(f.read().pulls.find((p) => p.base.ref === 'release/conflict').draft, true);
@@ -116,7 +120,7 @@ test('missing, conflicting, and empty targets do not prevent clean targets', (t)
 
 test('deleted requests are canceled but remaining requests for the same target survive', (t) => {
   const f = fixture(t);
-  f.request('release/88.0'); f.request('release/88.0', 2); f.request('release/87.0', 3);
+  f.request('release/88.0 release/87.0'); f.request('release/88.0', 2);
   f.write({ ...f.read(), comments: f.read().comments.filter((c) => c.id === 2) });
   f.success();
   assert.deepEqual(f.read().pulls.map((p) => p.base.ref), ['release/88.0']);
@@ -161,10 +165,11 @@ test('rerun recovers a PR created before approval failed without replacing it', 
 test('invalid refs and bot commands are ignored; command text is never evaluated by a shell', (t) => {
   const f = fixture(t);
   f.request('../invalid'); f.request('$(touch${IFS}INJECTED)', 2);
-  f.request('release/88.0', 3);
+  f.request('release/88.0 release/87.0', 3);
   const state = f.read(); state.comments.at(-1).user.type = 'Bot'; f.write(state);
+  f.request('../invalid release/88.0 -bad', 4);
   f.success();
-  assert.equal(f.read().pulls.length, 0);
+  assert.deepEqual(f.read().pulls.map((pr) => pr.base.ref), ['release/88.0']);
   assert.equal(fs.existsSync(path.join(f.root, 'INJECTED')), false);
 });
 

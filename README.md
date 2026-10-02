@@ -20,10 +20,16 @@ Cherry-pick PRs preserve the source PR's linked Linear tickets without changing 
 
 ## Multiple targets and retries
 
-Post a separate `cherry-pick to <branch>` comment for each target branch. You can request cherry-picks before or after the source PR merges. Requests made before merge are acknowledged and processed after merge.
+List multiple branches separated by spaces in one comment, or post a separate comment for each branch:
+
+```
+cherry-pick to release/88.0 release/87.0
+```
+
+You can request cherry-picks before or after the source PR merges. Requests made before merge are acknowledged and processed after merge. Keep the command on the first line; any notes can go below it.
 
 - Each target gets its own cherry-pick PR. A failure on one target does not prevent the others from being processed.
-- Repeated requests reuse an existing open or merged cherry-pick PR. Existing manual edits are preserved.
+- Repeated branches, whether in the same comment or separate comments, reuse an existing open or merged cherry-pick PR. Existing manual edits are preserved.
 - Conflicts produce a draft PR for you to resolve. If the changes are already present, the bot reports that no PR is needed.
 - To cancel a request before processing starts, delete all comments requesting that target. This does not undo an existing cherry-pick PR.
 - If a target branch is missing or an attempt fails, correct the problem and post a new cherry-pick comment or rerun the workflow.
