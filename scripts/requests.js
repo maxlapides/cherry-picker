@@ -5,7 +5,7 @@ function requests(comments) {
   const targets = new Map();
   for (const comment of comments) {
     if (comment.user?.type === 'Bot') continue;
-    const match = (comment.body || '').trim().match(/^cherry-pick to[ \t]+([^\s]+)$/);
+    const match = (comment.body || '').trim().split(/\r?\n/, 1)[0].trim().match(/^cherry-pick to[ \t]+([^\s]+)$/);
     if (!match) continue;
     const branch = match[1];
     // Validate as a full ref: --branch would expand special checkout syntax.

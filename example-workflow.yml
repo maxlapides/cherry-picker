@@ -37,7 +37,7 @@ jobs:
 
       - name: Run Cherry-Pick Action
         # Pin to a reviewed release SHA in production.
-        uses: maxlapides/cherry-picker@v1.6.0
+        uses: maxlapides/cherry-picker@v1.6.1
         with:
           token: ${{ steps.get_token.outputs.token }}
           gh_token: ${{ secrets.GH_TOKEN }}

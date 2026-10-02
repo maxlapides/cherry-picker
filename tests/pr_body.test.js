@@ -1,10 +1,6 @@
 const assert = require('node:assert/strict');
-const childProcess = require('node:child_process');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { test } = require('node:test');
-const { buildBody, main } = require('../scripts/pr_body');
+const { buildBody } = require('../scripts/pr_body');
 
 const SOURCE_URL = 'https://github.com/brexhq/mobile/pull/15922';
 
@@ -14,15 +10,6 @@ function linkback(identifier, login = 'linear-code[bot]', extra = '') {
     body: '<!-- linear-linkback -->\n<details><summary>' +
       `<a href="https://linear.app/brex/issue/${identifier}/fix">${identifier} Fix</a>` +
       `</summary><p>${extra}</p></details>`,
-  };
-}
-
-function runnerEnv(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-body-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  return {
-    GITHUB_REPOSITORY: 'brexhq/mobile', PR_NUMBER: '15922',
-    RUNNER_TEMP: directory, GITHUB_OUTPUT: path.join(directory, 'output'),
   };
 }
 
@@ -59,34 +46,4 @@ test('ignores unrelated mentions and spoofed linkbacks', () => {
 
 test('keeps the source reference when there are no tickets', () => {
   assert.equal(buildBody(SOURCE_URL, null, []), `Generated from ${SOURCE_URL}\n`);
-});
-
-test('writes a PR body that includes tickets from later comment pages', (t) => {
-  const env = runnerEnv(t);
-  t.mock.method(childProcess, 'execFileSync', (command, args) => {
-    assert.equal(command, 'gh');
-    if (args.join(' ') === 'api repos/brexhq/mobile/pulls/15922') {
-      return JSON.stringify({ html_url: SOURCE_URL, body: null });
-    }
-    assert.deepEqual(args, [
-      'api', '--paginate', '--slurp', 'repos/brexhq/mobile/issues/15922/comments?per_page=100',
-    ]);
-    return JSON.stringify([[{ user: { login: 'someone' }, body: 'hello' }], [linkback('REI-1647')]]);
-  });
-  main(env);
-  const output = fs.readFileSync(env.GITHUB_OUTPUT, 'utf8');
-  const bodyPath = output.match(/^body_path=(.*)$/m)[1];
-  assert.equal(fs.readFileSync(bodyPath, 'utf8'), `Generated from ${SOURCE_URL}\n\nRelated to REI-1647\n`);
-  assert.match(output, /^linear_ids=REI-1647$/m);
-});
-
-test('does not publish an incomplete body when GitHub fails', (t) => {
-  const env = runnerEnv(t);
-  t.mock.method(childProcess, 'execFileSync', (command, args) => {
-    if (args.includes('--paginate')) throw new Error('GitHub lookup failed');
-    return JSON.stringify({ html_url: SOURCE_URL, body: null });
-  });
-  assert.throws(() => main(env), /GitHub lookup failed/);
-  assert.equal(fs.existsSync(env.GITHUB_OUTPUT), false);
-  assert.equal(fs.existsSync(path.join(env.RUNNER_TEMP, 'cherry-pick-pr-body.md')), false);
 });

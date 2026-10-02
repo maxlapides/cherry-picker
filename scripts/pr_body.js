@@ -1,8 +1,3 @@
-// Build a cherry-pick description from Linear's GitHub linkback comments.
-const childProcess = require('node:child_process');
-const fs = require('node:fs');
-const path = require('node:path');
-
 function getIdentifiers(sourceBody, comments) {
   // Preserve our relation lines when cherry-picking a cherry-pick, even before
   // Linear has posted its linkback on that PR.
@@ -39,28 +34,4 @@ function buildBody(sourceUrl, sourceBody, comments) {
   return body + '\n';
 }
 
-function ghJson(...args) {
-  return JSON.parse(childProcess.execFileSync('gh', args, {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  }));
-}
-
-function main(env = process.env) {
-  const repository = env.GITHUB_REPOSITORY;
-  const prNumber = env.PR_NUMBER;
-  const source = ghJson('api', `repos/${repository}/pulls/${prNumber}`);
-  const pages = ghJson('api', '--paginate', '--slurp',
-    `repos/${repository}/issues/${prNumber}/comments?per_page=100`);
-  const comments = pages.flat();
-  const body = buildBody(source.html_url, source.body, comments);
-  const identifiers = getIdentifiers(source.body, comments);
-  const bodyPath = path.join(env.RUNNER_TEMP, 'cherry-pick-pr-body.md');
-  fs.writeFileSync(bodyPath, body, 'utf8');
-  fs.appendFileSync(env.GITHUB_OUTPUT, `body_path=${bodyPath}\n`, 'utf8');
-  fs.appendFileSync(env.GITHUB_OUTPUT, `linear_ids=${identifiers.join(' ')}\n`, 'utf8');
-}
-
-module.exports = { buildBody, getIdentifiers, main };
-
-if (require.main === module) main();
+module.exports = { buildBody, getIdentifiers };

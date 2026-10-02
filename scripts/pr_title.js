@@ -1,6 +1,3 @@
-const childProcess = require('node:child_process');
-const fs = require('node:fs');
-
 const ISSUE_ID = /^[A-Z][A-Z0-9]*-[0-9]+$/;
 
 function buildTitle(sourceTitle, targetBranch, identifiers, branchExists) {
@@ -25,20 +22,4 @@ function buildTitle(sourceTitle, targetBranch, identifiers, branchExists) {
   return `[${release}] ${title}`;
 }
 
-function main(env = process.env) {
-  const sourceTitle = childProcess.execFileSync('gh', [
-    'pr', 'view', env.PR_NUMBER, '--json', 'title', '--jq', '.title',
-  ], { encoding: 'utf8' }).trimEnd();
-  const identifiers = (env.LINEAR_IDS || '').split(' ').filter(Boolean);
-  const branchExists = (name) => [
-    `refs/heads/${name}`, `refs/remotes/origin/${name}`,
-  ].some((ref) => childProcess.spawnSync('git', [
-    'show-ref', '--verify', '--quiet', ref,
-  ]).status === 0);
-  const title = buildTitle(sourceTitle, env.TO_BRANCH, identifiers, branchExists);
-  fs.appendFileSync(env.GITHUB_OUTPUT, `title=${title}\n`, 'utf8');
-}
-
-module.exports = { buildTitle, main };
-
-if (require.main === module) main();
+module.exports = { buildTitle };

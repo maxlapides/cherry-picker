@@ -10,6 +10,8 @@ And let the cherry-picker handle the rest! A new pull request with the changes w
 
 If you want the cherry-pick PR to stay open for manual review and merge, set `auto_approve_and_merge: false` when using the action.
 
+When using auto-merge on protected branches, require pull request approvals and dismiss stale approvals when new commits are pushed. This ensures later manual changes need a new review.
+
 ## Example
 
 See `example-workflow.yml` for a complete example that you can copy/paste into your project and modify.

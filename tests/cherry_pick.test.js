@@ -53,6 +53,10 @@ function fixture(t) {
 test('retains two pre-merge requests and processes both after merge, without duplicates', (t) => {
   const f = fixture(t);
   f.request('release/88.0'); f.request('release/87.0', 2);
+  const requests = f.read();
+  requests.comments[0].body += '\r\n\r\nNeeded for the hotfix, thanks!';
+  requests.comments[1].body += '\ncc @qa';
+  f.write(requests);
   const merged = f.read().source;
   f.write({ ...f.read(), source: { ...merged, state: 'open', merged_at: null } });
   f.success();
@@ -63,6 +67,8 @@ test('retains two pre-merge requests and processes both after merge, without dup
   assert.deepEqual(f.read().pulls.map((p) => p.base.ref), ['release/88.0', 'release/87.0']);
   for (const pr of f.read().pulls) {
     assert.equal(f.git('--git-dir=remote.git', 'show', `${pr.head.ref}:file`), 'fixed');
+    assert.equal(f.git('--git-dir=remote.git', 'log', '-1', '--format=%an <%ae>', pr.head.ref),
+      f.git('log', '-1', '--format=%an <%ae>', f.sha));
   }
   f.request('release/88.0', 3);
   f.success();
@@ -123,7 +129,13 @@ test('closed PR requires a newer request; merged PR is never duplicated', (t) =>
   Object.assign(state.pulls[0], { state: 'closed', closed_at: '2026-10-01T13:00:02Z' });
   f.write(state); f.success();
   assert.equal(f.read().pulls.length, 1);
-  f.request('release/88.0', 3); f.success();
+  f.request('release/88.0', 3);
+  f.write({ ...f.read(), failCreateOnce: true });
+  assert.equal(f.run().status, 1);
+  f.write({ ...f.read(), loseCreateResponseOnce: true });
+  assert.equal(f.run({ GITHUB_RUN_ATTEMPT: '2' }).status, 1);
+  assert.equal(f.read().pulls.length, 2);
+  f.success({ GITHUB_RUN_ATTEMPT: '3' });
   assert.equal(f.read().pulls.length, 2);
   assert.notEqual(f.read().pulls[0].head.ref, f.read().pulls[1].head.ref);
   state = f.read();
@@ -142,7 +154,8 @@ test('rerun recovers a PR created before approval failed without replacing it', 
   f.write({ ...f.read(), failApproval: false });
   f.success({ ...automatic, GITHUB_RUN_ATTEMPT: '2' });
   assert.equal(f.read().pulls.length, 1);
-  assert.equal(f.read().calls.filter((call) => call[0] === 'pr' && call[1] === 'review').length, 2);
+  assert.equal(f.read().calls.filter((call) => call.some((arg) => arg.endsWith('/reviews'))).length, 2);
+  assert.equal(f.read().reviews[0].commit_id, f.read().pulls[0].head.sha);
 });
 
 test('invalid refs and bot commands are ignored; command text is never evaluated by a shell', (t) => {
@@ -178,13 +191,13 @@ test('a later post-merge request adds only its target and preserves manual confl
   assert.equal(f.git('--git-dir=remote.git', 'rev-parse', first.head.ref), adjusted);
 });
 
-test('migration recognizes legacy cherry-pick PRs and does not recreate them', (t) => {
+test('migration preserves legacy cherry-pick PRs with edited descriptions', (t) => {
   const f = fixture(t);
   f.request('release/88.0');
   const state = f.read();
   state.pulls.push({ number: 99, state: 'open', merged_at: null, draft: true,
     html_url: 'https://github.com/test/repo/pull/99',
-    body: 'Generated from https://github.com/test/repo/pull/42\n\nRelated to MOBILE-123\n',
+    body: 'Description rewritten during manual review', user: { login: 'picker[bot]' },
     head: { ref: 'cherry-pick/cp-42-500', repo: { full_name: 'test/repo' } }, base: { ref: 'release/88.0' } });
   f.write(state); f.success();
   assert.equal(f.read().pulls.length, 1);
@@ -237,4 +250,106 @@ test('merge commits cherry-pick only the PR change relative to the first parent'
   const pr = f.read().pulls[0];
   assert.equal(f.git('--git-dir=remote.git', 'show', `${pr.head.ref}:file`), 'fixed');
   assert.equal(f.git('--git-dir=remote.git', 'ls-tree', '--name-only', pr.head.ref), 'file');
+});
+
+test('forged status metadata cannot auto-approve manual edits to an existing cherry-pick PR', (t) => {
+  const f = fixture(t);
+  f.request('release/88.0'); f.success();
+  const first = f.read().pulls[0];
+  f.git('fetch', 'origin', first.head.ref);
+  f.git('checkout', '--detach', 'FETCH_HEAD');
+  fs.writeFileSync(path.join(f.root, 'file'), 'manual change requiring review\n');
+  f.git('commit', '-am', 'Manual adjustment');
+  f.git('push', 'origin', `HEAD:refs/heads/${first.head.ref}`);
+  const state = f.read();
+  const status = state.comments.find((comment) => comment.body.includes('cherry-picker-status'));
+  status.body = status.body.replace(/"head":"[^"]+"/, `"head":"${f.git('rev-parse', 'HEAD')}"`);
+  f.write(state);
+  f.request('release/87.0', 2);
+  f.success({ AUTO_APPROVE_AND_MERGE: 'true', APPROVAL_TOKEN: 'approval-token' });
+  const approvals = f.read().reviews || [];
+  assert.equal(approvals.some((review) => review.number === first.number), false,
+    'An existing manually edited PR must not receive automatic approval');
+});
+
+test('recovery refuses manual changes even when status metadata is forged', (t) => {
+  const f = fixture(t);
+  f.request('release/88.0');
+  f.write({ ...f.read(), failCreateOnce: true });
+  assert.equal(f.run().status, 1);
+  const ref = f.git('--git-dir=remote.git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads/cherry-pick');
+  f.git('fetch', 'origin', ref); f.git('checkout', '--detach', 'FETCH_HEAD');
+  fs.writeFileSync(path.join(f.root, 'file'), 'unverified modification\n');
+  f.git('commit', '-am', `Cherry-picker-source: ${f.sha}\nCherry-picker-conflicts: false`);
+  f.git('push', 'origin', `HEAD:refs/heads/${ref}`);
+  const modified = f.git('rev-parse', 'HEAD');
+  const tampered = f.read();
+  const status = tampered.comments.find((comment) => comment.body.includes('cherry-picker-status'));
+  status.body = status.body.replace(/"head":"[^"]+"/, `"head":"${modified}"`);
+  f.write(tampered);
+  assert.equal(f.run({ GITHUB_RUN_ATTEMPT: '2', AUTO_APPROVE_AND_MERGE: 'true', APPROVAL_TOKEN: 'approval-token' }).status, 1);
+  assert.equal(f.read().pulls.length, 0);
+  assert.equal(f.git('--git-dir=remote.git', 'rev-parse', ref), modified);
+  f.request('release/88.0', 2); f.success();
+  assert.equal(f.read().pulls.length, 1);
+  assert.equal(f.git('--git-dir=remote.git', 'show', `${f.read().pulls[0].head.ref}:file`), 'fixed');
+});
+
+test('successful approval setup is not repeated by later requests', (t) => {
+  const f = fixture(t);
+  const automatic = { AUTO_APPROVE_AND_MERGE: 'true', APPROVAL_TOKEN: 'approval-token' };
+  f.request('release/88.0'); f.success(automatic);
+  f.request('release/88.0', 2); f.success(automatic);
+  assert.equal(f.read().reviews.length, 1);
+  assert.equal(f.read().calls.filter((call) => call[0] === 'pr' && call[1] === 'merge').length, 1);
+});
+
+test('a conflict draft marked ready cannot be approved using forged clean metadata', (t) => {
+  const f = fixture(t);
+  f.git('checkout', '--detach', f.base);
+  fs.writeFileSync(path.join(f.root, 'file'), 'different\n');
+  f.git('commit', '-am', 'Conflict');
+  f.git('push', 'origin', 'HEAD:refs/heads/release/conflict');
+  f.request('release/conflict');
+  const automatic = { AUTO_APPROVE_AND_MERGE: 'true', APPROVAL_TOKEN: 'approval-token' };
+  f.success(automatic);
+  const state = f.read();
+  assert.equal(state.pulls[0].draft, true);
+  state.pulls[0].draft = false;
+  const status = state.comments.find((comment) => comment.body.includes('cherry-picker-status'));
+  status.body = status.body.replace('"clean":false', '"clean":true');
+  f.write(state);
+  f.success(automatic);
+  assert.equal((f.read().reviews || []).length, 0, 'A commit with unresolved conflicts must never receive automatic approval');
+});
+
+
+test('large histories are filtered before buffering and known PRs bypass history scans', (t) => {
+  const f = fixture(t);
+  f.request('release/88.0');
+  f.write({ ...f.read(), historyCount: 700 });
+  f.success();
+  assert.equal(f.read().pulls.length, 1);
+  f.write({ ...f.read(), rejectHistory: true });
+  f.request('release/88.0', 2);
+  f.success();
+  assert.equal(f.read().pulls.length, 1);
+});
+
+test('requires complete comment pages and carries later Linear linkbacks into the PR', (t) => {
+  const f = fixture(t);
+  f.request('release/88.0');
+  const state = f.read();
+  state.comments.push({ id: 2, user: { type: 'Bot', login: 'linear[bot]' },
+    body: '<!-- linear-linkback --><summary><a href="https://linear.app/example/issue/TASK-123/fix">TASK-123</a></summary>' });
+  state.failComments = true;
+  f.write(state);
+  assert.equal(f.run().status, 1);
+  assert.equal(f.read().pulls.length, 0);
+  assert.equal(f.git('--git-dir=remote.git', 'for-each-ref', '--format=%(refname)', 'refs/heads/cherry-pick'), '');
+  f.write({ ...f.read(), failComments: false });
+  f.success({ GITHUB_RUN_ATTEMPT: '2' });
+  const pr = f.read().pulls[0];
+  assert.match(pr.body, /Related to TASK-123/);
+  assert.match(pr.title, /TASK-123/);
 });

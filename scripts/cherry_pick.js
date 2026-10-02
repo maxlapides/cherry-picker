@@ -26,10 +26,10 @@ if (env.GH_TOKEN) {
   gitEnv[`GIT_CONFIG_VALUE_${count + 1}`] = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${env.GH_TOKEN}`).toString('base64')}`;
 }
 const git = (...args) => exec('git', args, { env: gitEnv });
-function api(endpoint, data, method = 'POST') {
+function api(endpoint, data, method = 'POST', token = env.GH_TOKEN) {
   return JSON.parse(exec('gh', ['api', endpoint,
     ...(data === undefined ? [] : ['--method', method, '--input', '-'])],
-  data === undefined ? {} : { input: JSON.stringify(data) }));
+  { env: { ...env, GH_TOKEN: token }, ...(data === undefined ? {} : { input: JSON.stringify(data) }) }));
 }
 function pages(endpoint) {
   return JSON.parse(exec('gh', ['api', '--paginate', '--slurp', endpoint])).flat();
@@ -46,6 +46,32 @@ function metadata(comment) {
   try { return JSON.parse(match[1]); } catch { return null; }
 }
 
+function findPulls(target, prefix, viewer, knownNumber) {
+  const legacy = new RegExp(`^cherry-pick/cp-${number}-[0-9]+$`);
+  // gh applies this filter per page. Only matching PR metadata reaches Node;
+  // unrelated bodies and repository objects never accumulate in its buffer.
+  const filter = `select(.base.ref == ${JSON.stringify(target)}) |
+    select(.head.repo.full_name == ${JSON.stringify(repository)}) |
+    select((.head.ref | startswith(${JSON.stringify(prefix)})) or
+      ((.head.ref | test(${JSON.stringify(legacy.source)})) and .user.login == ${JSON.stringify(viewer)})) |
+    {number, html_url, state, merged_at, closed_at, draft,
+     head: {ref: .head.ref, sha: .head.sha, repo: {full_name: .head.repo.full_name}},
+     base: {ref: .base.ref}, user: {login: .user.login}} | @json`;
+  const read = (args) => exec('gh', ['api', ...args]).split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  if (Number.isSafeInteger(knownNumber) && knownNumber > 0) {
+    const known = read(['--jq', filter, `${apiRoot}/pulls/${knownNumber}`]);
+    if (known.some((pr) => pr.merged_at || pr.state === 'open')) return known;
+  }
+  return read(['--paginate', '--jq', `.[] | ${filter}`,
+    `${apiRoot}/pulls?state=all&base=${encodeURIComponent(target)}&per_page=100`]);
+}
+
+function pullMessage(pr, target) {
+  if (pr.merged_at) return `The cherry-pick to \`${target}\` was merged: ${pr.html_url}`;
+  if (pr.draft) return `The cherry-pick to \`${target}\` is a draft. Please resolve any conflicts and review it: ${pr.html_url}`;
+  return `The cherry-pick to \`${target}\` has a pull request: ${pr.html_url}`;
+}
+
 async function main() {
   if (!/^[1-9]\d*$/.test(number || '')) throw new Error('pr_number must be a positive integer');
   const source = api(`${apiRoot}/pulls/${number}`);
@@ -59,13 +85,18 @@ async function main() {
   if (source.merged_at && env.AUTO_APPROVE_AND_MERGE === 'true' && !env.APPROVAL_TOKEN) {
     throw new Error('gh_token is required when auto_approve_and_merge is enabled');
   }
-  function autoMerge(pr) {
-    if (pr.merged_at || pr.draft || env.AUTO_APPROVE_AND_MERGE !== 'true') return;
-    exec('gh', ['pr', 'merge', '--repo', repository, '--auto', '--squash', String(pr.number)]);
-    exec('gh', ['pr', 'review', '--repo', repository, '--approve', String(pr.number)],
-      { env: { ...env, GH_TOKEN: env.APPROVAL_TOKEN } });
+  function autoMerge(pr, preparation, target) {
+    if (pr.merged_at || pr.draft || env.AUTO_APPROVE_AND_MERGE !== 'true') return false;
+    // Require the recorded commit and verify its contents independently in Git.
+    // Existing PRs without that provenance (or with manual edits) need human review.
+    if (!preparation?.clean || pr.head.sha !== preparation.head) return false;
+    if (verifyCommit(target, preparation.head, source.merge_commit_sha) !== 'clean') return false;
+    api(`${apiRoot}/pulls/${pr.number}/reviews`, { event: 'APPROVE', commit_id: preparation.head }, 'POST', env.APPROVAL_TOKEN);
+    exec('gh', ['pr', 'merge', '--repo', repository, '--auto', '--squash',
+      '--match-head-commit', preparation.head, String(pr.number)]);
+    return true;
   }
-  function branchExists(target) {
+  function targetExists(target) {
     const check = result(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${target}`]);
     if (check.status === 2) return false;
     if (check.status !== 0) throw new Error(check.stderr || 'Cannot access target branch');
@@ -76,9 +107,12 @@ async function main() {
   for (const [target, request] of targets) {
     let statusComment = comments.filter((c) => c.user?.login === viewer && metadata(c)?.target === target).at(-1);
     const previous = statusComment && metadata(statusComment);
+    let preparation = previous?.phase === phase ? previous.preparation : undefined;
+    let pullNumber = previous?.pr;
+    let automated = previous?.phase === phase && previous.automated === true;
     const mention = [...new Set([request.user.login, source.user.login])].map((login) => `@${login}`).join(' ');
     function report(status, message) {
-      const state = { target, request: request.id, phase, status };
+      const state = { target, request: request.id, phase, status, preparation, automated, pr: pullNumber };
       const body = `${mention} ${message}\n\n<!-- cherry-picker-status ${JSON.stringify(state)} -->`;
       if (statusComment?.body === body) return;
       statusComment = statusComment
@@ -87,7 +121,7 @@ async function main() {
     }
     try {
       if (!source.merged_at) {
-        if (source.state !== 'closed' && !branchExists(target)) {
+        if (source.state !== 'closed' && !targetExists(target)) {
           report('missing', `The branch \`${target}\` doesn't exist. Please check the branch name and post a new cherry-pick comment.`);
           continue;
         }
@@ -97,18 +131,16 @@ async function main() {
         continue;
       }
       const prefix = branchPrefix(number, target);
-      const pulls = pages(`${apiRoot}/pulls?state=all&base=${encodeURIComponent(target)}&per_page=100`)
-        .filter((pr) => pr.head.repo?.full_name === repository &&
-          (pr.head.ref.startsWith(prefix) ||
-            (new RegExp(`^cherry-pick/cp-${number}-[0-9]+$`).test(pr.head.ref) &&
-             pr.body?.split('\n')[0] === `Generated from ${source.html_url}`)));
+      const pulls = findPulls(target, prefix, viewer, pullNumber);
       const existing = pulls.find((pr) => pr.merged_at) || pulls.find((pr) => pr.state === 'open');
       if (existing) {
-        autoMerge(existing);
-        report('created', `The cherry-pick to \`${target}\` ${existing.merged_at ? 'was merged' : 'already has a pull request'}: ${existing.html_url}`);
+        pullNumber = existing.number;
+        if (!automated) automated = autoMerge(existing, preparation, target);
+        report('created', pullMessage(existing, target));
         continue;
       }
       const closed = pulls.sort((a, b) => Date.parse(b.closed_at) - Date.parse(a.closed_at))[0];
+      if (closed) pullNumber = closed.number;
       if (closed && Date.parse(request.created_at) <= Date.parse(closed.closed_at)) {
         report('closed', `The cherry-pick to \`${target}\` was closed without merging: ${closed.html_url}. To try again, post a new cherry-pick comment.`);
         continue;
@@ -116,7 +148,7 @@ async function main() {
       // A different target's request must not repeatedly retry old failures.
       if (previous?.request === request.id && previous.phase === phase &&
           ['failed', 'empty', 'missing'].includes(previous.status) && Number(env.GITHUB_RUN_ATTEMPT || 1) === 1) continue;
-      if (!branchExists(target)) {
+      if (!targetExists(target)) {
         report('missing', `The branch \`${target}\` doesn't exist. Please check the branch name and post a new cherry-pick comment.`);
         continue;
       }
@@ -124,16 +156,20 @@ async function main() {
       const title = buildTitle(source.title, target, getIdentifiers(source.body, comments),
         (name) => result(['show-ref', '--verify', '--quiet', `refs/remotes/origin/${name}`]).status === 0);
       const body = buildBody(source.html_url, source.body, comments);
-      const outcome = createBranch(target, head, source.merge_commit_sha, title);
+      const outcome = createBranch(target, head, source.merge_commit_sha, title, preparation, (prepared) => {
+        preparation = prepared;
+        pullNumber = undefined;
+        automated = false;
+        report('prepared', `Preparing the cherry-pick to \`${target}\`.`);
+      });
       if (outcome === 'empty') {
         report('empty', `The changes are already present on \`${target}\`; there is nothing to cherry-pick.`);
         continue;
       }
       const pr = api(`${apiRoot}/pulls`, { head, base: target, title, body, draft: outcome === 'conflict' });
-      report('created', outcome === 'conflict'
-        ? `The cherry-pick to \`${target}\` has conflicts. Please resolve them in this draft pull request: ${pr.html_url}`
-        : `A new pull request has been opened to cherry-pick to \`${target}\`: ${pr.html_url}`);
-      autoMerge(pr);
+      pullNumber = pr.number;
+      automated = autoMerge(pr, preparation, target);
+      report('created', pullMessage(pr, target));
     } catch (error) {
       failed = true;
       console.error(`Cherry-pick to ${target} failed: ${error.message}`);
@@ -145,7 +181,45 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-function createBranch(target, head, sha, title) {
+function replayCommit(sha, worktree) {
+  const run = (...args) => exec('git', args, { cwd: worktree, env: gitEnv });
+  const parents = run('rev-list', '--parents', '-n', '1', sha).split(' ');
+  const picked = result(['-c', 'user.name=Cherry-pick Bot', '-c', 'user.email=noreply@github.com',
+    'cherry-pick', '--no-commit', ...(parents.length > 2 ? ['-m', '1'] : []), sha], worktree);
+  const conflicts = run('diff', '--name-only', '--diff-filter=U');
+  if (picked.status !== 0 && !conflicts) throw new Error(picked.stderr || picked.stdout || 'Cherry-pick failed');
+  if (conflicts) run('add', '--all');
+  return Boolean(conflicts);
+}
+
+// Status comments are editable by collaborators. Reproduce the change in Git
+// before trusting a recorded head for approval or interrupted-push recovery.
+function verifyCommit(target, head, source) {
+  const directory = fs.mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(), 'cherry-pick-verify-'));
+  const worktree = path.join(directory, 'worktree');
+  try {
+    git('fetch', 'origin', `refs/heads/${target}`);
+    const targetHead = git('rev-parse', 'FETCH_HEAD');
+    git('fetch', 'origin', head);
+    const ancestry = git('rev-list', '--parents', '-n', '1', head).split(' ');
+    if (ancestry.length !== 2) return null;
+    const ancestor = result(['merge-base', '--is-ancestor', ancestry[1], targetHead]);
+    if (ancestor.status === 1) return null;
+    if (ancestor.status !== 0) throw new Error(ancestor.stderr || 'Cannot verify cherry-pick parent');
+    git('fetch', 'origin', source);
+    git('worktree', 'add', '--detach', worktree, ancestry[1]);
+    const conflicts = replayCommit(source, worktree);
+    const comparison = result(['diff', '--cached', '--quiet', head], worktree);
+    if (comparison.status === 1) return null;
+    if (comparison.status !== 0) throw new Error(comparison.stderr || 'Cannot compare cherry-pick trees');
+    return conflicts ? 'conflict' : 'clean';
+  } finally {
+    if (fs.existsSync(worktree)) git('worktree', 'remove', '--force', worktree);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function createBranch(target, head, sha, title, preparation, recordPreparation) {
   const directory = fs.mkdtempSync(path.join(env.RUNNER_TEMP || os.tmpdir(), 'cherry-pick-'));
   const worktree = path.join(directory, 'worktree');
   try {
@@ -156,24 +230,24 @@ function createBranch(target, head, sha, title) {
     const remote = result(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${head}`]);
     if (remote.status === 0) {
       run('fetch', 'origin', `refs/heads/${head}`);
-      const message = run('log', '-1', '--format=%B', 'FETCH_HEAD');
-      if (!message.includes(`Cherry-picker-source: ${sha}`)) throw new Error(`Existing branch ${head} does not belong to this attempt`);
-      return message.includes('Cherry-picker-conflicts: true') ? 'conflict' : 'clean';
+      if (!preparation || run('rev-parse', 'FETCH_HEAD') !== preparation.head) {
+        throw new Error(`Existing branch ${head} has unverified changes; post a new cherry-pick comment to try again`);
+      }
+      const verified = verifyCommit(target, preparation.head, sha);
+      if (!verified) throw new Error(`Existing branch ${head} does not match the source cherry-pick`);
+      return verified;
     }
     if (remote.status !== 2) throw new Error(remote.stderr || 'Cannot inspect cherry-pick branch');
     run('fetch', 'origin', sha);
-    const parents = run('rev-list', '--parents', '-n', '1', sha).split(' ');
-    const picked = result(['-c', 'user.name=Cherry-pick Bot', '-c', 'user.email=noreply@github.com',
-      'cherry-pick', '--no-commit', ...(parents.length > 2 ? ['-m', '1'] : []), sha], worktree);
-    const conflicts = run('diff', '--name-only', '--diff-filter=U');
-    if (picked.status !== 0 && !conflicts) throw new Error(picked.stderr || picked.stdout || 'Cherry-pick failed');
-    if (conflicts) run('add', '--all');
+    const conflicts = replayCommit(sha, worktree);
     const diff = result(['diff', '--cached', '--quiet'], worktree);
     if (diff.status === 0) return 'empty';
     if (diff.status !== 1) throw new Error(diff.stderr || 'Cannot inspect cherry-pick changes');
     run('-c', 'user.name=Cherry-pick Bot', '-c', 'user.email=noreply@github.com',
-      '-c', 'commit.gpgSign=false', 'commit', '-m', title, '-m',
+      '-c', 'commit.gpgSign=false', 'commit', '--author', run('log', '-1', '--format=%an <%ae>', sha),
+      '-m', title, '-m',
       `Cherry-picker-source: ${sha}\nCherry-picker-conflicts: ${Boolean(conflicts)}`);
+    recordPreparation({ head: run('rev-parse', 'HEAD'), clean: !conflicts });
     run('push', 'origin', `HEAD:refs/heads/${head}`);
     return conflicts ? 'conflict' : 'clean';
   } finally {
